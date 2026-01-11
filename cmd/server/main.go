@@ -78,15 +78,22 @@ func (s *Server) Run() error {
 
 		var request mcp.Request
 		if err := json.Unmarshal(line, &request); err != nil {
-			// For parse errors, ID must be null per JSON-RPC 2.0 spec
-			s.sendError(json.RawMessage("null"), mcp.ParseError, "Parse error", err.Error())
+			// Log parse error but don't send response with null ID
+			// Claude Desktop's Zod schema rejects null IDs
+			log.Printf("Parse error: %v", err)
 			continue
 		}
 
-		// Skip notifications (requests without an ID)
-		if len(request.ID) == 0 || string(request.ID) == "null" {
-			// Still handle the method for side effects, but don't respond
-			s.handleRequest(&request)
+		// Check if this is a notification (no ID field or explicitly null)
+		// Per JSON-RPC 2.0: notifications have no "id" member
+		isNotification := len(request.ID) == 0 || string(request.ID) == "null"
+
+		if isNotification {
+			// Handle notification methods silently (no response)
+			switch request.Method {
+			case "initialized", "notifications/cancelled":
+				// Known notifications - no action needed
+			}
 			continue
 		}
 
@@ -95,32 +102,17 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) handleRequest(req *mcp.Request) {
-	// Check if this is a notification (no ID means no response expected)
-	isNotification := len(req.ID) == 0 || string(req.ID) == "null"
-
 	switch req.Method {
 	case "initialize":
-		if !isNotification {
-			s.handleInitialize(req)
-		}
-	case "initialized", "notifications/cancelled":
-		// Notifications - no response needed
+		s.handleInitialize(req)
 	case "tools/list":
-		if !isNotification {
-			s.handleListTools(req)
-		}
+		s.handleListTools(req)
 	case "tools/call":
-		if !isNotification {
-			s.handleCallTool(req)
-		}
+		s.handleCallTool(req)
 	case "ping":
-		if !isNotification {
-			s.sendResult(req.ID, map[string]string{})
-		}
+		s.sendResult(req.ID, map[string]string{})
 	default:
-		if !isNotification {
-			s.sendError(req.ID, mcp.MethodNotFound, "Method not found", req.Method)
-		}
+		s.sendError(req.ID, mcp.MethodNotFound, "Method not found", req.Method)
 	}
 }
 
